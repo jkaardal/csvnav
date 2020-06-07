@@ -2,7 +2,7 @@
 
 The csvnav directory contains a single file called csvnav.py. This file is a python module containing the class `Navigator`. When instantiated, `Navigator` will open a given path and then store pointers to the location of each row in the opened file. In the simplest case, one can use the instantiation sort of like a list. For instance, if I have a file "inventory.csv" containing the following CSV data:
 ```
-time, product, quantity
+time,product,quantity
 5,tire,4
 8,sparkplug,20
 2,battery,120
