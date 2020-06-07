@@ -44,7 +44,7 @@ gives the output (assuming we have a header):
 
 Another usage of the class is to group pointers by column name (assuming `Navigator.header` is set). This can be done with the `Navigator.register` method. For instance, consider an expanded version of "inventory.csv":
 ```
-time, product, quantity
+time,product,quantity
 5,tire,4
 8,sparkplug,20
 2,battery,120
