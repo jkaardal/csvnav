@@ -77,7 +77,7 @@ will print out the following groups (list of dict or list):
 ```
 Note that groups are then accessed by two "indexes", namely the column name and the key.
 
-`Navigator` has some more functionality that I have not described here but this covers the basics. The docstring will then cover the rest when I have time to write it. The code is fairly poorly documented overall at the moment but will be improved in the near future.
+`Navigator` has some more functionality that I have not described here but this covers the basics. Refer to the docstrings of the various methods of the `Navigator` class for more information.
 
 ## About
 
