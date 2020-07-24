@@ -67,7 +67,7 @@ class Navigator:
         function will return None. In this case, you can get the length of the file by calling self.size(force=True).
         See the method self.size() for more information.
 
-        :return int|None: the number of rows of data or None if the end of the file has not been reached.
+        :returns int|None: the number of rows of data or None if the end of the file has not been reached.
         """
         return self.size()
 
@@ -84,7 +84,7 @@ class Navigator:
         :param bool force: when True, forcibly computes the number of characters in the file even if the end of the file
             has not been reached. When False and the end of the file has not been reached, the function will return
             None. Default is False.
-        :return int|None: the number of characters in the file or None if the end of the file has not been reached.
+        :returns int|None: the number of characters in the file or None if the end of the file has not been reached.
         """
         if force and self.char_len is None:
             # Forcibly compute if stored value is None.
@@ -99,7 +99,7 @@ class Navigator:
             file has not been reached. When False and the end of the file has not been reached, this function will
             return None. Warning - to count the number of rows when force=True, this function needs to iterate through 
             all the rows in the file which could take long for very large files. Default is False.
-        :return int|None: the number of rows of data in the file or None if the end of the file has not been reached.
+        :returns int|None: the number of rows of data in the file or None if the end of the file has not been reached.
         """
         # Get the number of rows in the file (less self.skip and the header lines).
         if force and self.length is None:
@@ -208,7 +208,7 @@ class Navigator:
         """
         Gets a dict_keys object corresponding the fields (columns) that have been grouped by the self.register() method.
 
-        :return dict_keys: fields (columns) that have been registered.
+        :returns dict_keys: fields (columns) that have been registered.
         """
         return self.field_ptr.keys()
         
@@ -217,7 +217,7 @@ class Navigator:
         Gets a dict_keys object corresponding to the unique values of the field (column) that has been used to key a
         grouping by the self.register() method.
 
-        :return dict_keys: keys of a registered field (column).
+        :returns dict_keys: keys of a registered field (column).
         """
         return self.field_ptr[field].keys()
         
@@ -225,7 +225,7 @@ class Navigator:
         """
         Get the header that defines the columns of the file.
 
-        :return list<immutable>: the header of the file.
+        :returns list<immutable>: the header of the file.
         """
         return self.header
         
@@ -237,6 +237,7 @@ class Navigator:
         :param str key: one of the unique values in the field (column) of the file defined by field that is used as a
             key in the grouping by the self.register() method.
         :param any default: value to return if key does not exist. Default is None.
+        :returns list<dict>|any: either returns the matching rows or a default value.
         """
         if key not in self.keys(field):
             # If the key does not exist for a given field, return the default.
@@ -244,6 +245,16 @@ class Navigator:
         else:
             # Key exists, return the value.
             return self.__getitem__((field, key))
+
+    def items(self, field):
+        """
+        Get a generator over key/value pairs for a given registered field by the self.register() method.
+
+        :param immutable field: typically a string that matches an element of the header.
+        :yields (str, any): returns a generator that iterates over a tuple of key/value pairs.
+        """
+        for key, ptr in self.field_ptr[field].items():
+            yield key, self.__getitem__((field, key))
         
     def __getitem__(self, index):
         """
@@ -262,7 +273,7 @@ class Navigator:
                 tuple<immutable,str> - a two element tuple where the first element is the field (column) and the second
                     element is the key which returns all rows that match the field and key. Must be registered first
                     by method self.register().
-        :return str|dict|list<any>|list<dict|list|str>: the five different return types depend on the following 
+        :returns str|dict|list<any>|list<dict|list|str>: the five different return types depend on the following 
             conditions:
                 str - when raw_output=True and index is an int, then the row is returned as a string.
                 dict - when the Navigator instance has a header defined and index is an int, then a dictionary of column
@@ -475,7 +486,7 @@ class Navigator:
         """
         Initialize an iterator over the rows of data in the file.
 
-        :return Navigator self: returns this instance.
+        :returns Navigator self: returns this instance.
         """
         self.start_iter = 0
         return self
@@ -484,7 +495,7 @@ class Navigator:
         """
         Get the next row of data in the file.
 
-        :return str|dict|list<any>: a row with types defined in the __getitem__ return documentation.
+        :returns str|dict|list<any>: a row with types defined in the __getitem__ return documentation.
         """
         if self.start_iter >= self.size(force=True):
             raise StopIteration
