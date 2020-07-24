@@ -253,7 +253,7 @@ class Navigator:
         :param immutable field: typically a string that matches an element of the header.
         :yields (str, any): returns a generator that iterates over a tuple of key/value pairs.
         """
-        for key, ptr in self.field_ptr[field].items():
+        for key in self.field_ptr[field]:
             yield key, self.__getitem__((field, key))
         
     def __getitem__(self, index):
