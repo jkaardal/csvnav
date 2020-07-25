@@ -256,6 +256,185 @@ class Navigator:
         for key in self.field_ptr[field]:
             yield key, self.__getitem__((field, key))
         
+    def _handle_slice(self, index):
+        """
+        Private method to handle slicing of the Navigator object.
+
+        :param index: a slice object.
+        :yields: either string, list, or dictionary of a row.
+        """
+        assert isinstance(index, slice)
+        # Received a slice so get a result generator of corresponding rows.
+        start = 0 if index.start is None else index.start
+        step = 1 if index.step is None else index.step
+
+        if self.length is None:
+            # Length of the file is unknown, need to explore.
+            stop = None if index.stop is None else index.stop
+            assert start >= 0
+            idx = start
+            while True:
+                if stop is None or idx < stop:
+                    # We have not reached the end of the slice yet.
+                    if idx >= self.horizon:
+                        # The current row index is beyond what has been explored.
+                        if self.horizon == 0:
+                            # We have not explored anything yet, start from the beginning and skip non-data.
+                            self.fp.seek(0)
+                            for _ in range(self.skip):
+                                self.fp.readline()
+                            if self.header:
+                                self.fp.readline()
+                        else:
+                            # Go to the last known row pointer and advance the pointer by one row.
+                            self.fp.seek(self.row_ptr[-1])
+                            self.fp.readline()
+                        # Get the current pointer to the first unexplored row.
+                        ptr = self.fp.tell()
+                        # Iterate through unexplored rows until we reach the requested row.
+                        for i in range(self.horizon, idx+1):
+                            line = self.fp.readline()
+                            if line:
+                                # An unexplored line has been found, store the pointer to this newly explored
+                                # row, set the pointer to the next unexplored row, and advance the horizon.
+                                self.row_ptr.append(ptr)
+                                ptr = self.fp.tell()
+                                self.horizon += 1
+                            else:
+                                # The end of the file has been reached. Set the row length of the file.
+                                self.length = self.horizon
+                                stop = self.length
+                                break
+                        if self.length is not None:
+                            # No lines left to add to the result list, break out of while loop.
+                            break
+                    # Now that we have the pointer for the current index, move to the pointer.
+                    self.fp.seek(self.row_ptr[idx])
+                    if self.raw_output:
+                        # Get the row as a string.
+                        row = self.fp.readline()
+                    else:
+                        # Get the row, optionally reformat, and read as csv.
+                        line = self.fp.readline()
+                        line = self.reformat(self, line)
+                        row = list(csv.reader([line], **self.fmtparams))[0]
+                    # Yield the row and prepare to move on to the next index in the slice.
+                    if self.header and not self.raw_output:
+                        # Yield the row as a dictionary.
+                        yield {k: v for k, v in zip(self.header, row)}
+                    else:
+                        # Yield the row as a string or list.
+                        yield row
+                    idx += step
+                else:
+                    # We are at the end of the slice, break out.
+                    break
+        else:
+            # Length of the file is known.
+            stop = self.length if index.stop is None else index.stop
+            assert start >= 0 and stop <= self.length
+            # Since all rows must have been explored to know the length of the file, we can simply iterate over
+            # the slice.
+            for idx in range(start, stop, step):
+                # Move to the pointer of the current row index.
+                self.fp.seek(self.row_ptr[idx])
+                if self.raw_output:
+                    # Get the row as a string.
+                    row = self.fp.readline()
+                else:
+                    # Get the row, optionally reformat, and read as csv.
+                    line = self.fp.readline()
+                    line = self.reformat(self, line)
+                    row = list(csv.reader([line], **self.fmtparams))[0]
+                if self.header and not self.raw_output:
+                    # Yield the row as a dictionary.
+                    yield {k: v for k, v in zip(self.header, row)}
+                else:
+                    # Yield the row as a string or list.
+                    yield row
+
+    def _handle_scalar(self, index):
+        """
+        Private method to handle an index of the Navigator object.
+
+        :param index: an integer index.
+        :returns: a string, list, or dictionary of a row. 
+        """
+        if self.length is not None:
+            assert index < self.length
+        if index >= self.horizon:
+            # The row index is beyond what has been explored.
+            if self.horizon == 0:
+                # We have not explored anything yet, start from the beginning and skip non-data.
+                self.fp.seek(0)
+                for _ in range(self.skip):
+                    self.fp.readline()
+                if self.header:
+                    self.fp.readline()
+            else:
+                # Go to the last known row pointer and advance the pointer by one row.
+                self.fp.seek(self.row_ptr[-1])
+                self.fp.readline()
+            # Get the current pointer to the first unexplored row.
+            ptr = self.fp.tell()
+            # Iterate through the unexplored rows until we reach the requested row.
+            for i in range(self.horizon, index+1):
+                line = self.fp.readline()
+                if line:
+                    # An unexplored line has been found, store the pointer to this newly explored row, set
+                    # the pointer to the next unexplored row, and advance the horizon.
+                    self.row_ptr.append(ptr)
+                    ptr = self.fp.tell()
+                    self.horizon += 1
+                else:
+                    # The end of the file has been reached. Set the row length of the file.
+                    self.length = self.horizon
+                    break
+            if self.length is not None:
+                # Throw an error if index is too large.
+                assert index < self.length
+        # Now that we have the pointer for the requested row, move to the pointer.
+        self.fp.seek(self.row_ptr[index])
+        if self.raw_output:
+            # Get the row as a string.
+            row = self.fp.readline()
+        else:
+            # Get the row, optionally reformat, and read as csv.
+            line = self.fp.readline()
+            line = self.reformat(self, line)
+            row = list(csv.reader([line], **self.fmtparams))[0]
+        if self.header and not self.raw_output:
+            # Convert the row into a dictionary.
+            row = {k: v for k, v in zip(self.header, row)}
+        return row
+
+    def _handle_field(self, field, index):
+        """
+        Private method to handle registered field indexing.
+
+        :param field: an immutable (typically string) that may be used to get the pointers for a field.
+        :yields: a string, list, or dictionary of a row.
+        """
+        # TODO: make it possible to run this without the extra self.register() step.
+        # Iterate through the pointers of all matching rows.
+        for ptr in self.field_ptr[field][index]:
+            # Move to the pointer.
+            self.fp.seek(ptr)
+            if self.raw_output:
+                # Get the row as a string.
+                row = self.fp.readline()
+            else:
+                # Get the row, optionally reformat, and read as csv.
+                line = self.fp.readline()
+                line = self.reformat(self, line)
+                row = list(csv.reader([line], **self.fmtparams))[0]
+            if self.header and not self.raw_output:
+                # Yield the row as a dictionary.
+                yield {k: v for k, v in zip(self.header, row)}
+            else:
+                # Yield the row as a string or list.
+                yield row
+
     def __getitem__(self, index):
         """
         Get row(s) from the file by index/indices or field and key. May use brackets to access this method.
@@ -293,194 +472,20 @@ class Navigator:
             index = index[1]
         else:
             field = None
-        
+
         if field is None:
             # Integer index/indices given instead of registered field and key.
-            if self.length is None:
-                # Total length of file is not currently known.
-                if isinstance(index, slice):
-                    # Received a slice so get a result list of corresponding rows.
-                    start = 0 if index.start is None else index.start
-                    stop = None if index.stop is None else index.stop
-                    step = 1 if index.step is None else index.step
-                    assert start >= 0
-                    rows = []
-                    idx = start
-                    while True:
-                        if stop is None or idx < stop:
-                            # We have not reached the end of the slice yet.
-                            if idx >= self.horizon:
-                                # The current row index is beyond what has been explored.
-                                if self.horizon == 0:
-                                    # We have not explored anything yet, start from the beginning and skip non-data.
-                                    self.fp.seek(0)
-                                    for _ in range(self.skip):
-                                        self.fp.readline()
-                                    if self.header:
-                                        self.fp.readline()
-                                else:
-                                    # Go to the last known row pointer and advance the pointer by one row.
-                                    self.fp.seek(self.row_ptr[-1])
-                                    self.fp.readline()
-                                # Get the current pointer to the first unexplored row.
-                                ptr = self.fp.tell()
-                                # Iterate through unexplored rows until we reach the requested row.
-                                for i in range(self.horizon, idx+1):
-                                    line = self.fp.readline()
-                                    if line:
-                                        # An unexplored line has been found, store the pointer to this newly explored
-                                        # row, set the pointer to the next unexplored row, and advance the horizon.
-                                        self.row_ptr.append(ptr)
-                                        ptr = self.fp.tell()
-                                        self.horizon += 1
-                                    else:
-                                        # The end of the file has been reached. Set the row length of the file.
-                                        self.length = self.horizon
-                                        stop = self.length
-                                        break
-                                if self.length is not None:
-                                    # No lines left to add to the result list, break out of while loop.
-                                    break
-                            # Now that we have the pointer for the current index, move to the pointer.
-                            self.fp.seek(self.row_ptr[idx])
-                            if self.raw_output:
-                                # Get the row as a string.
-                                row = self.fp.readline()
-                            else:
-                                # Get the row, optionally reformat, and read as csv.
-                                line = self.fp.readline()
-                                line = self.reformat(self, line)
-                                row = list(csv.reader([line], **self.fmtparams))[0]
-                            # Append the row to the result list and move on to the next index in the slice.
-                            if self.header and not self.raw_output:
-                                # Add the row as a dictionary to the results list.
-                                rows.append({k: v for k, v in zip(self.header, row)})
-                            else:
-                                # Add the row as a string or list to the results list.
-                                rows.append(row)
-                            idx += step
-                        else:
-                            # We are at the end of the slice, break out.
-                            break
-                    return rows
-                else:
-                    # An integer index was received, get a single row.
-                    if index >= self.horizon:
-                        # The row index is beyond what has been explored.
-                        if self.horizon == 0:
-                            # We have not explored anything yet, start from the beginning and skip non-data.
-                            self.fp.seek(0)
-                            for _ in range(self.skip):
-                                self.fp.readline()
-                            if self.header:
-                                self.fp.readline()
-                        else:
-                            # Go to the last known row pointer and advance the pointer by one row.
-                            self.fp.seek(self.row_ptr[-1])
-                            self.fp.readline()
-                        # Get the current pointer to the first unexplored row.
-                        ptr = self.fp.tell()
-                        # Iterate through the unexplored rows until we reach the requested row.
-                        for i in range(self.horizon, index+1):
-                            line = self.fp.readline()
-                            if line:
-                                # An unexplored line has been found, store the pointer to this newly explored row, set
-                                # the pointer to the next unexplored row, and advance the horizon.
-                                self.row_ptr.append(ptr)
-                                ptr = self.fp.tell()
-                                self.horizon += 1
-                            else:
-                                # The end of the file has been reached. Set the row length of the file.
-                                self.length = self.horizon
-                                break
-                        if self.length is not None:
-                            # Throw an error if index is too large.
-                            assert index < self.length
-                    # Now that we have the pointer for the requested row, move to the pointer.
-                    self.fp.seek(self.row_ptr[index])
-                    if self.raw_output:
-                        # Get the row as a string.
-                        row = self.fp.readline()
-                    else:
-                        # Get the row, optionally reformat, and read as csv.
-                        line = self.fp.readline()
-                        line = self.reformat(self, line)
-                        row = list(csv.reader([line], **self.fmtparams))[0]
-                    if self.header and not self.raw_output:
-                        # Convert the row into a dictionary.
-                        row = {k: v for k, v in zip(self.header, row)}
-                    return row
+            if isinstance(index, slice):
+                # Received a slice so return a generator over the corresponding rows.
+                return self._handle_slice(index)
             else:
-                # The total row length of the file is already known.
-                if isinstance(index, slice):
-                    # Received a slice so get a result list of corresponding rows.
-                    start = 0 if index.start is None else index.start
-                    stop = self.length if index.stop is None else index.stop
-                    step = 1 if index.step is None else index.step
-                    assert start >= 0 and stop <= self.length
-                    rows = []
-                    # Since all rows must have been explored to know the length of the file, we can simply iterate over
-                    # the slice.
-                    for idx in range(start, stop, step):
-                        # Move to the pointer of the current row index.
-                        self.fp.seek(self.row_ptr[idx])
-                        if self.raw_output:
-                            # Get the row as a string.
-                            row = self.fp.readline()
-                        else:
-                            # Get the row, optionally reformat, and read as csv.
-                            line = self.fp.readline()
-                            line = self.reformat(self, line)
-                            row = list(csv.reader([line], **self.fmtparams))[0]
-                        if self.header and not self.raw_output:
-                            # Add the row as a dictionary to the results list.
-                            rows.append({k: v for k, v in zip(self.header, row)})
-                        else:
-                            # Add the row as a string or list to the results list.
-                            rows.append(row)
-                    return rows
-                else:
-                    # An integer index was received, get a single row.
-                    assert index < self.length
-                    # Move to the pointer of the row index.
-                    self.fp.seek(self.row_ptr[index])
-                    if self.raw_output:
-                        # Get the row as a string.
-                        row = self.fp.readline()
-                    else:
-                        # Get the row, optionally reformat, and read as csv.
-                        line = self.fp.readline()
-                        line = self.reformat(self, line)
-                        row = list(csv.reader([line], **self.fmtparams))[0]
-                    if self.header and not self.raw_output:
-                        # Convert the row into a dictionary.
-                        row = {k: v for k, v in zip(self.header, row)}
-                    return row
+                # An integer index was received, get a single row.
+                return self._handle_scalar(index)
         else:
-            # Received a field (column) and key (where index=key) as input, get all rows where the value of the field
-            # column matches the key. Note that there is no need to deal with unexplored rows like in the above case
-            # because it is necessary to explore all rows when registering in the first place.
-            # TODO: make it possible to run this without the extra self.register() step.
-            rows = []
-            # Iterate through the pointers of all matching rows.
-            for ptr in self.field_ptr[field][index]:
-                # Move to the pointer.
-                self.fp.seek(ptr)
-                if self.raw_output:
-                    # Get the row as a string.
-                    row = self.fp.readline()
-                else:
-                    # Get the row, optionally reformat, and read as csv.
-                    line = self.fp.readline()
-                    line = self.reformat(self, line)
-                    row = list(csv.reader([line], **self.fmtparams))[0]
-                if self.header and not self.raw_output:
-                    # Add the row as a dictionary to the results list.
-                    rows.append({k: v for k, v in zip(self.header, row)})
-                else:
-                    # Add the row as a string or list to the results list.
-                    rows.append(row)
-            return rows
+            # Received a field (column) and key (where index=key) as input, get a generator over rows where the value of
+            # the field column matches the key. Note that there is no need to deal with unexplored rows like in the 
+            # above case because it is necessary to explore all rows when registering in the first place.
+            return self._handle_field(field, index)
         
     def __iter__(self):
         """
