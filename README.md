@@ -6,6 +6,9 @@ time,product,quantity
 5,tire,4
 8,sparkplug,20
 2,battery,120
+10,tire,2
+11,tire,3
+30,sparkplug,35
 ```
 I can instantiate the class and query rows by index:
 ```python
@@ -20,8 +23,8 @@ nav.close()
 ```
 where the output would be:
 ```
-{'time': '5', 'product': 'tire', 'quantity': '4'}
-{'time': '2', 'product': 'battery', 'quantity': '120'}
+{'product': 'tire', 'quantity': '4', 'time': '5'}
+{'product': 'battery', 'quantity': '120', 'time': '2'}
 3
 ```
 Note that number of data rows (excluding the header) can be printed by calling `Navigator.size(force=True)`. In this case, `force=True` means that the number of data rows in the file will be determined even if the last row in the file has not be accessed yet. If the last row had been accessed, `force=False` would return the same result. However, if the last had not been accessed, `force=False` would return `None`. Another thing to note is that the rows are returned as a dictionary. As long as `Navigator.header` contains a list of the column names (done automatically from the first row of the CSV file when `header=True` in instantiation), the rows will be returned as a dictionary. Otherwise, the rows are returned as lists. For example, if "inventory.csv" did not have a header (and `header=False`) then the output would be:
@@ -40,6 +43,9 @@ gives the output (assuming we have a header):
 {'time': '5', 'product': 'tire', 'quantity': '4'}
 {'time': '8', 'product': 'sparkplug', 'quantity': '20'}
 {'time': '2', 'product': 'battery', 'quantity': '120'}
+{'time': '10', 'product': 'tire', 'quantity': '2'}
+{'time': '11', 'product': 'tire', 'quantity': '3'}
+{'time': '30', 'product': 'sparkplug', 'quantity': '35'}
 ```
 
 If we only want to iterate through a subset of rows that match a condition, we can use the `Navigator.filter` method:
@@ -65,16 +71,7 @@ will produce the output:
 {'time': '11', 'product': 'tire', 'quantity': '3'} 
 ```
 
-Another usage of the class is to group pointers by column name (assuming `Navigator.header` is set). This can be done with the `Navigator.register` method. For instance, consider an expanded version of "inventory.csv":
-```
-time,product,quantity
-5,tire,4
-8,sparkplug,20
-2,battery,120
-10,tire,2
-11,tire,3
-30,sparkplug,35
-```
+Another usage of the class is to group pointers by column name (assuming `Navigator.header` is set). This can be done with the `Navigator.register` method.
 The following code will then group rows by product and show how this data can be accessed:
 ```python
 from csvnav import Navigator
