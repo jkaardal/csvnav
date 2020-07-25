@@ -42,6 +42,29 @@ gives the output (assuming we have a header):
 {'time': '2', 'product': 'battery', 'quantity': '120'}
 ```
 
+If we only want to iterate through a subset of rows that match a condition, we can use the `Navigator.filter` method:
+```python
+from csvnav import Navigator
+
+nav = Navigator('./inventory.csv', header=True, delimiter=',')
+
+def when_few_tires(row):
+    if row['product'] == 'tire' and int(row['quantity']) <= 3:
+        return True
+    else:
+        return False
+
+for row in nav.filter(when_few_tires):
+    print(row)
+
+nav.close()
+```
+will produce the output:
+```
+{'time': '10', 'product': 'tire', 'quantity': '2'}
+{'time': '11', 'product': 'tire', 'quantity': '3'} 
+```
+
 Another usage of the class is to group pointers by column name (assuming `Navigator.header` is set). This can be done with the `Navigator.register` method. For instance, consider an expanded version of "inventory.csv":
 ```
 time,product,quantity
@@ -60,20 +83,20 @@ nav = Navigator('./inventory.csv', header=True, delimiter=',')
 
 nav.register('product') # can also provide a list of columns to register each
 
+print(nav.fields)
 print(nav.keys('product'))
-for k in nav.keys('product'):
-    print(nav['product', k])
-    print()
+for k, v in nav.items('product'):
+    print(k, list(v))
 
 nav.close()
 ```
 will print out the following groups (list of dict or list):
 ```
-[{'time': '5', 'product': 'tire', 'quantity': '4'}, {'time': '10', 'product': 'tire', 'quantity': '2'}, {'time': '11', 'product': 'tire', 'quantity': '3'}]
-
-[{'time': '8', 'product': 'sparkplug', 'quantity': '20'}, {'time': '30', 'product': 'sparkplug', 'quantity': '35'}]
-
-[{'time': '2', 'product': 'battery', 'quantity': '120'}]
+dict_keys(['product'])
+dict_keys(['tire', 'sparkplug', 'battery'])
+tire [{'time': '5', 'product': 'tire', 'quantity': '4'}, {'time': '10', 'product': 'tire', 'quantity': '2'}, {'time': '11', 'product': 'tire', 'quantity': '3'}]
+sparkplug [{'time': '8', 'product': 'sparkplug', 'quantity': '20'}, {'time': '30', 'product': 'sparkplug', 'quantity': '35'}]
+battery [{'time': '2', 'product': 'battery', 'quantity': '120'}]
 ```
 Note that groups are then accessed by two "indexes", namely the column name and the key.
 
