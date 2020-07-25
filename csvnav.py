@@ -151,6 +151,17 @@ class Navigator:
         """
         self.header = header
 
+    def filter(self, condition: Callable[[GenericRowType], bool]) -> GenericRowType:
+        """
+        Get a generator that only yields rows matching a given condition.
+
+        :param condition: a function that takes in a row and returns a boolean for whether to yield the row or not.
+        :yields: either string, list, or dictionary of a row.
+        """
+        for row in self:
+            if condition(row):
+                yield row
+
     def register(self, fields: Hashable or List[Hashable]):
         """
         Group rows by the values in a column. See the README.md file for an example. Note that this is also memory
