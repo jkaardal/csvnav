@@ -1,6 +1,12 @@
 ## CSVNAV: a python class for memory-efficient navigation of CSV/Text files.
 
-The csvnav directory contains a single file called csvnav.py. This file is a python module containing the class `Navigator`. When instantiated, `Navigator` will open a given path and then store pointers to the location of each row in the opened file. In the simplest case, one can use the instantiation sort of like a list. For instance, if I have a file "inventory.csv" containing the following CSV data:
+This package can be installed using setup tools:
+```sh
+python setup.py install
+```
+run from within the `csvnav` directory.
+
+The file `csvnav.py` is a python module containing the class `Navigator`. When instantiated, `Navigator` will open a given path and then store pointers to the location of each row in the opened file. In the simplest case, one can use the instantiation sort of like a list. For instance, if I have a file "inventory.csv" containing the following CSV data:
 ```
 time,product,quantity
 5,tire,4
