@@ -1,29 +1,36 @@
+from typing import Hashable, Any, Callable, List, Tuple, Generator
+from collections import KeysView
 import csv
+
+GenericRowType = dict or list or str
+GenericGenType = Generator[GenericRowType, None, None]
+GenericIndexType = int or slice or Tuple[Hashable, str]
 
 
 class Navigator:
     
-    def __init__(self, path, header=False, raw_output=False, reformat=None, skip=0, dialect='excel', open_opts=None, 
-                 **fmtparams):
+    def __init__(self, path: str, header: bool = False, raw_output: bool = False, 
+                 reformat: Callable[['Navigator', str], str] = None, skip: int = 0, dialect: str = 'excel', 
+                 open_opts: dict = None, **fmtparams):
         """
         Instantiate a Navigator object. Note that this class assumes that the file it opens is static.
 
-        :param str path: absolute or relative path to the file to be opened.
-        :param bool header: when True, indicates the file has a row specifying the header titles after skipping skip 
+        :param path: absolute or relative path to the file to be opened.
+        :param header: when True, indicates the file has a row specifying the header titles after skipping skip 
             (see below) rows. If the file does not contain a header but you would like to define the columns you may
             mimic a header by calling self.set_header() to a list of strings after instantiation. Default is False.
-        :param bool raw_output: when True, rows in the file are returned as raw strings without any formatting applied. 
+        :param raw_output: when True, rows in the file are returned as raw strings without any formatting applied. 
             When False, the raw string is optionally subjected to reformat (see below) and then returned as a csv 
             formatted (using **fmtparams, see below) list of strings. Default is False.
-        :param function reformat: if raw_output is False, a reformat function can optionally be provided that takes as 
+        :param reformat: if raw_output is False, a reformat function can optionally be provided that takes as 
             arguments self (this instance) and a string corresponding to a row in the file and returns a modified string
             that is then passed into csv.reader. Default is lambda self, line: line.
-        :param int skip: number of rows to skip at the beginning of the file to reach either the header row or the first
+        :param skip: number of rows to skip at the beginning of the file to reach either the header row or the first
             row of data. Default is 0.
-        :param str dialect: see csv.reader() docs for definition. Default is 'excel'.
-        :param dict open_opts: see keyword arguments in the docs for builtin function open(). Note that the keyword
+        :param dialect: see csv.reader() docs for definition. Default is 'excel'.
+        :param open_opts: see keyword arguments in the docs for builtin function open(). Note that the keyword
             argument mode is restricted because Navigator is fixed to mode 'r'. Default is {} (uses defaults).
-        :param **dict **fmtparams: additional keyword arguments are passed into csv.reader() and the supported fields
+        :param **fmtparams: additional keyword arguments are passed into csv.reader() and the supported fields
             are identical to those defined by the fmtparams argument of csv.reader() in the documentation.
         """
         self.open_opts = {} if open_opts is None else open_opts
@@ -61,13 +68,13 @@ class Navigator:
         """
         self.fp.close()
     
-    def __len__(self):
+    def __len__(self) -> int or None:
         """
         Get the number of rows of data in the file. Note that if the end of the file has not been accessed, this
         function will return None. In this case, you can get the length of the file by calling self.size(force=True).
         See the method self.size() for more information.
 
-        :returns int|None: the number of rows of data or None if the end of the file has not been reached.
+        :returns: the number of rows of data or None if the end of the file has not been reached.
         """
         return self.size()
 
@@ -75,31 +82,32 @@ class Navigator:
         """
         Close the file when Navigator instance is garbage collected.
         """
-        self.close()
+        if hasattr(self, 'fp'):
+            self.close()
     
-    def chars(self, force=False):
+    def chars(self, force: bool = False) -> int or None:
         """
         Get the total number of characters in the file.
 
-        :param bool force: when True, forcibly computes the number of characters in the file even if the end of the file
+        :param force: when True, forcibly computes the number of characters in the file even if the end of the file
             has not been reached. When False and the end of the file has not been reached, the function will return
             None. Default is False.
-        :returns int|None: the number of characters in the file or None if the end of the file has not been reached.
+        :returns: the number of characters in the file or None if the end of the file has not been reached.
         """
         if force and self.char_len is None:
             # Forcibly compute if stored value is None.
             self.char_len = self.fp.seek(0, 2)
         return self.char_len
     
-    def size(self, force=False):
+    def size(self, force: bool = False) -> int or None:
         """
         Get the size number of rows of data in the file.
 
-        :param bool force: when True, forcibly computes the number of rows of data in the file even if the end of the
+        :param force: when True, forcibly computes the number of rows of data in the file even if the end of the
             file has not been reached. When False and the end of the file has not been reached, this function will
             return None. Warning - to count the number of rows when force=True, this function needs to iterate through 
             all the rows in the file which could take long for very large files. Default is False.
-        :returns int|None: the number of rows of data in the file or None if the end of the file has not been reached.
+        :returns: the number of rows of data in the file or None if the end of the file has not been reached.
         """
         # Get the number of rows in the file (less self.skip and the header lines).
         if force and self.length is None:
@@ -134,17 +142,16 @@ class Navigator:
                         
         return self.length
 
-    def set_header(self, header):
+    def set_header(self, header: List[Hashable]):
         """
         Set the file's header (does not modify the file).
 
-        :param list<immutable> header: the header can technically be composed of any immutable objects but is typically
-            composed of strings. The number of elements in the list should be equal to the number of columns in the
-            file. 
+        :param header: the header can technically be composed of any hashable objects but is typically composed of
+            strings. The number of elements in the list should be equal to the number of columns in the file.
         """
         self.header = header
 
-    def register(self, fields):
+    def register(self, fields: Hashable or List[Hashable]):
         """
         Group rows by the values in a column. See the README.md file for an example. Note that this is also memory
         efficient in the sense that it only stores pointers and does not store the grouped data in memory. This method
@@ -153,9 +160,9 @@ class Navigator:
 
         TODO: add the option to perform conjuctions/disjunctions?
 
-        :param immutable|list<immutable> fields: either an immutable (typically a string) or a list of immutables that
-            correspond to column names defined in self.header whose values we would like to group by. Note that each
-            field is grouped independently (no conjunctions/disjunctions).
+        :param fields: either a hashable (typically a string) or a list of hashables that correspond to column names
+            defined in self.header whose values we would like to group by. Note that each field is grouped independently
+            (no conjunctions/disjunctions).
         """
         # If the file has a header, rows can be grouped such that the values of a field (column) are keys.
         assert self.header is not None
@@ -204,40 +211,42 @@ class Navigator:
         self.length = length
         self.horizon = length
         
-    def fields(self):
+    @property
+    def fields(self) -> KeysView:
         """
         Gets a dict_keys object corresponding the fields (columns) that have been grouped by the self.register() method.
 
-        :returns dict_keys: fields (columns) that have been registered.
+        :returns: fields (columns) that have been registered.
         """
         return self.field_ptr.keys()
         
-    def keys(self, field):
+    def keys(self, field: Hashable) -> KeysView:
         """
         Gets a dict_keys object corresponding to the unique values of the field (column) that has been used to key a
         grouping by the self.register() method.
 
-        :returns dict_keys: keys of a registered field (column).
+        :returns: keys of a registered field (column).
         """
         return self.field_ptr[field].keys()
         
-    def cols(self):
+    @property
+    def cols(self) -> List[Hashable]:
         """
         Get the header that defines the columns of the file.
 
-        :returns list<immutable>: the header of the file.
+        :returns: the header of the file.
         """
         return self.header
         
-    def get(self, field, key, default=None):
+    def get(self, field: Hashable, key: str, default: Any = None) -> GenericGenType or Any:
         """
         Get a row by field (column) and key provided a key has been registered by self.register() method.
 
-        :param immutable field: typically a string that matches an element of the header.
-        :param str key: one of the unique values in the field (column) of the file defined by field that is used as a
-            key in the grouping by the self.register() method.
-        :param any default: value to return if key does not exist. Default is None.
-        :returns list<dict>|any: either returns the matching rows or a default value.
+        :param field: typically a string that matches an element of the header.
+        :param key: one of the unique values in the field (column) of the file defined by field that is used as a key in
+            the grouping by the self.register() method.
+        :param default: value to return if key does not exist. Default is None.
+        :returns: either returns the matching rows or a default value.
         """
         if key not in self.keys(field):
             # If the key does not exist for a given field, return the default.
@@ -246,17 +255,17 @@ class Navigator:
             # Key exists, return the value.
             return self.__getitem__((field, key))
 
-    def items(self, field):
+    def items(self, field: Hashable) -> Generator[Tuple[str, GenericGenType], None, None]:
         """
         Get a generator over key/value pairs for a given registered field by the self.register() method.
 
-        :param immutable field: typically a string that matches an element of the header.
-        :yields (str, any): returns a generator that iterates over a tuple of key/value pairs.
+        :param field: typically a string that matches an element of the header.
+        :yields: returns a generator that iterates over a tuple of key/value pairs.
         """
         for key in self.field_ptr[field]:
             yield key, self.__getitem__((field, key))
         
-    def _handle_slice(self, index):
+    def _handle_slice(self, index: slice) -> GenericRowType:
         """
         Private method to handle slicing of the Navigator object.
 
@@ -353,7 +362,7 @@ class Navigator:
                     # Yield the row as a string or list.
                     yield row
 
-    def _handle_scalar(self, index):
+    def _handle_scalar(self, index: int) -> GenericRowType:
         """
         Private method to handle an index of the Navigator object.
 
@@ -408,16 +417,17 @@ class Navigator:
             row = {k: v for k, v in zip(self.header, row)}
         return row
 
-    def _handle_field(self, field, index):
+    def _handle_field(self, field: Hashable, key: str) -> GenericRowType:
         """
         Private method to handle registered field indexing.
 
-        :param field: an immutable (typically string) that may be used to get the pointers for a field.
+        :param field: a hashable (typically string) that may be used to get the pointers for a field.
+        :param key: rows will match this key.
         :yields: a string, list, or dictionary of a row.
         """
         # TODO: make it possible to run this without the extra self.register() step.
         # Iterate through the pointers of all matching rows.
-        for ptr in self.field_ptr[field][index]:
+        for ptr in self.field_ptr[field][key]:
             # Move to the pointer.
             self.fp.seek(ptr)
             if self.raw_output:
@@ -435,7 +445,7 @@ class Navigator:
                 # Yield the row as a string or list.
                 yield row
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: GenericIndexType) -> GenericRowType or GenericGenType:
         """
         Get row(s) from the file by index/indices or field and key. May use brackets to access this method.
         E.g. data[5] will get the 6th row of data from the file while data['myfield', 'mykey'] will get all rows where
@@ -444,27 +454,20 @@ class Navigator:
 
         TODO: accept negative indices?
 
-        :param int|slice|tuple<immutable,str> index: this variable may take on three forms such that it may be used to
-            access rows by either index or by field (column) and key (see self.register() method). The three forms are:
+        :param index: this variable may take on three forms such that it may be used to access rows by either index or
+            by field (column) and key (see self.register() method). The three forms are:
                 int - get a single row by index.
                 slice - return one or more rows by index via a slicing operation. Only supports non-negative integers
                     at least for now.
-                tuple<immutable,str> - a two element tuple where the first element is the field (column) and the second
+                tuple<hashable,str> - a two element tuple where the first element is the field (column) and the second
                     element is the key which returns all rows that match the field and key. Must be registered first
                     by method self.register().
-        :returns str|dict|list<any>|list<dict|list|str>: the five different return types depend on the following 
-            conditions:
+        :returns: the three different return/yield types depend on the following conditions:
                 str - when raw_output=True and index is an int, then the row is returned as a string.
                 dict - when the Navigator instance has a header defined and index is an int, then a dictionary of column
                     names to values in the indexed row is returned.
-                list<any> - when the Navigator instance does NOT have a header defined and index is an int, then a list 
+                list<str> - when the Navigator instance does NOT have a header defined and index is an int, then a list 
                     of values is returned for the indexed row is returned.
-                list<dict> - when the Navigator instance has a header defined and index is either a slice or a tuple, 
-                    then a list is returned where each element corresponds to a row formatted as a dictionary.
-                list<list> - when the Navigator instance does NOT have a header defined and index is a slice or a tuple,
-                    then a list is returned where each element is a list that corresponds to a row formatted as a list.
-                list<str> - when raw_output=True and index is a slice, then a list is returned where each element
-                    corresponds to a row formatted as a string.
         """
         if isinstance(index, tuple):
             assert len(index) == 2
@@ -487,20 +490,20 @@ class Navigator:
             # above case because it is necessary to explore all rows when registering in the first place.
             return self._handle_field(field, index)
         
-    def __iter__(self):
+    def __iter__(self) -> 'Navigator':
         """
         Initialize an iterator over the rows of data in the file.
 
-        :returns Navigator self: returns this instance.
+        :returns: returns this instance.
         """
         self.start_iter = 0
         return self
     
-    def __next__(self):
+    def __next__(self) -> GenericRowType:
         """
         Get the next row of data in the file.
 
-        :returns str|dict|list<any>: a row with types defined in the __getitem__ return documentation.
+        :returns: a row with types defined in the __getitem__ return documentation.
         """
         if self.start_iter >= self.size(force=True):
             raise StopIteration
