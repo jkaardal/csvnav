@@ -1,6 +1,7 @@
-from typing import Hashable, Any, Callable, List, Tuple, Generator
+from typing import Hashable, Any, Callable, List, Tuple, Generator, TextIO
 from collections import KeysView
 import csv
+import threading
 
 GenericRowType = dict or list or str
 GenericGenType = Generator[GenericRowType, None, None]
@@ -33,20 +34,24 @@ class Navigator:
         :param **fmtparams: additional keyword arguments are passed into csv.reader() and the supported fields
             are identical to those defined by the fmtparams argument of csv.reader() in the documentation.
         """
+        self.path = path
+        self.file_has_header = header
         self.open_opts = {} if open_opts is None else open_opts
         self.fmtparams = fmtparams
-        # Open the file.
-        self.fp = open(path, 'r', **self.open_opts)
+        # Get the current thread id.
+        thread_id = threading.get_ident()
+        # Open the file (index by current thread id).
+        self.fps = {thread_id: open(self.path, 'r', **self.open_opts)}
         # Skip extraneous non-header and non-data lines at the beginning of file.
         self.skip = skip
         for _ in range(skip):
-            self.fp.readline()
+            self.fps[thread_id].readline()
         # Initialize pointer list and dict for registering groups.
         self.row_ptr = []
         self.field_ptr = {}
         if header:
             # Extract the csv header.
-            self.header = list(csv.reader([self.fp.readline()], **self.fmtparams))[0]
+            self.header = list(csv.reader([self.fps[thread_id].readline()], **self.fmtparams))[0]
         else:
             # The file does not have a header.
             self.header = None
@@ -61,12 +66,32 @@ class Navigator:
         self.reformat = lambda self, line: line if reformat is None else reformat
         # Initialize iterator counter.
         self.start_iter = 0
+        # Thread locking.
+        self.lock = threading.Lock()
+
+    def get_or_create_fp(self) -> TextIO:
+        """
+        For the calling thread, either get an existing file pointer or create a new one. If a previous file pointer
+        attached to this thread has been closed, this will not open a new one but rather return the closed file pointer.
+        The file pointer is unique to the calling thread.
+
+        :returns: a file pointer unique to the calling thread.
+        """
+        # This function should be thread safe since dict keys are unique to the thread.
+        thread_id = threading.get_ident()
+        if thread_id in self.fps:
+            return self.fps[thread_id]
+        else:
+            self.fps[thread_id] = open(self.path, 'r', **self.open_opts)
+            return self.fps[thread_id]
 
     def close(self):
         """
-        Close the file, if it is open.
+        Close the file, if it is open. Only closes the file pointer assigned to the calling thread.
         """
-        self.fp.close()
+        thread_id = threading.get_ident()
+        if thread_id in self.fps:
+            self.fps[thread_id].close()
     
     def __len__(self) -> int or None:
         """
@@ -80,9 +105,10 @@ class Navigator:
 
     def __del__(self):
         """
-        Close the file when Navigator instance is garbage collected.
+        Close the file when Navigator instance is garbage collected. Will only close the file pointer assigned to the 
+        calling thread.
         """
-        if hasattr(self, 'fp'):
+        if hasattr(self, 'fps'):
             self.close()
     
     def chars(self, force: bool = False) -> int or None:
@@ -94,9 +120,10 @@ class Navigator:
             None. Default is False.
         :returns: the number of characters in the file or None if the end of the file has not been reached.
         """
+        fp = self.get_or_create_fp()
         if force and self.char_len is None:
             # Forcibly compute if stored value is None.
-            self.char_len = self.fp.seek(0, 2)
+            self.char_len = fp.seek(0, 2)
         return self.char_len
     
     def size(self, force: bool = False) -> int or None:
@@ -109,38 +136,41 @@ class Navigator:
             all the rows in the file which could take long for very large files. Default is False.
         :returns: the number of rows of data in the file or None if the end of the file has not been reached.
         """
-        # Get the number of rows in the file (less self.skip and the header lines).
-        if force and self.length is None:
-            # Forcibly compute the length of the file if it is not currently known.
-            if self.horizon == 0:
-                # File has not been explored yet, determine size from top of file.
-                self.fp.seek(0)
-                # Skip lines.
-                for _ in range(self.skip):
-                    self.fp.readline()
-                # Skip header.
-                if self.header:
-                    self.fp.readline()
-            else:
-                # Move to last known position and skip line.
-                self.fp.seek(self.row_ptr[-1])
-                self.fp.readline()
-            # Get pointer to current position.
-            ptr = self.fp.tell()
-            while True:
-                # Read each remaining row in the file.
-                line = self.fp.readline()
-                if line:
-                    # Row found, expand horizon and continue.
-                    self.row_ptr.append(ptr)
-                    ptr = self.fp.tell()
-                    self.horizon += 1
+        fp = self.get_or_create_fp()
+        # The size of the file is universal across threads so only one needs to do the work and others can wait.
+        with self.lock:
+            # Get the number of rows in the file (less self.skip and the header lines).
+            if force and self.length is None:
+                # Forcibly compute the length of the file if it is not currently known.
+                if self.horizon == 0:
+                    # File has not been explored yet, determine size from top of file.
+                    fp.seek(0)
+                    # Skip lines.
+                    for _ in range(self.skip):
+                        fp.readline()
+                    # Skip header.
+                    if self.file_has_header:
+                        fp.readline()
                 else:
-                    # No more rows found, report length.
-                    self.length = self.horizon
-                    break
-                        
-        return self.length
+                    # Move to last known position and skip line.
+                    fp.seek(self.row_ptr[-1])
+                    fp.readline()
+                # Get pointer to current position.
+                ptr = fp.tell()
+                while True:
+                    # Read each remaining row in the file.
+                    line = fp.readline()
+                    if line:
+                        # Row found, expand horizon and continue.
+                        self.row_ptr.append(ptr)
+                        ptr = fp.tell()
+                        self.horizon += 1
+                    else:
+                        # No more rows found, report length.
+                        self.length = self.horizon
+                        break
+                            
+            return self.length
 
     def set_header(self, header: List[Hashable]):
         """
@@ -175,6 +205,7 @@ class Navigator:
             defined in self.header whose values we would like to group by. Note that each field is grouped independently
             (no conjunctions/disjunctions).
         """
+        fp = self.get_or_create_fp()
         # If the file has a header, rows can be grouped such that the values of a field (column) are keys.
         assert self.header is not None
         assert not self.raw_output
@@ -182,21 +213,22 @@ class Navigator:
             # Only a single field was provided, put in a list.
             fields = [fields]
         # Start from the beginning of the file.
-        self.fp.seek(0)
+        fp.seek(0)
         # Skip lines.
         for _ in range(self.skip):
-            self.fp.readline()
-        # Skip header.
-        self.fp.readline()
+            fp.readline()
+        if self.file_has_header:
+            # Skip header.
+            fp.readline()
         # Get position of first line of data.
-        ptr = self.fp.tell()
+        ptr = fp.tell()
         # Initialize mappings, row pointer array, and number of data rows.
         field_to_col = {k: self.header.index(k) for k in fields}
         fields_to_vals = {k: {} for k in fields}
         row_ptr = []
         length = 0
         while True:
-            line = self.fp.readline()
+            line = fp.readline()
             if line:
                 # If the line is non-empty, store a pointer to the beginning of the line.
                 row_ptr.append(ptr)
@@ -211,12 +243,14 @@ class Navigator:
                     else:
                         fields_to_vals[field][val].append(ptr)
                 # Update pointer and expand known data row length of file.
-                ptr = self.fp.tell()
+                ptr = fp.tell()
                 length += 1
             else:
                 # End-of-file.
                 break
+        # Since all rows explored, store all row pointers (atomic).
         self.row_ptr = row_ptr
+        # GIL protects us and all threads should have the same result for a given field.
         for field, vals in fields_to_vals.items():
             self.field_ptr[field] = fields_to_vals[field]
         self.length = length
@@ -273,6 +307,7 @@ class Navigator:
         :param field: typically a string that matches an element of the header.
         :yields: returns a generator that iterates over a tuple of key/value pairs.
         """
+        # Should be thread safe because content of self.field_ptr[field] should not change once registered.
         for key in self.field_ptr[field]:
             yield key, self.__getitem__((field, key))
         
@@ -288,6 +323,7 @@ class Navigator:
         start = 0 if index.start is None else index.start
         step = 1 if index.step is None else index.step
 
+        fp = self.get_or_create_fp()
         if self.length is None:
             # Length of the file is unknown, need to explore.
             stop = None if index.stop is None else index.stop
@@ -300,42 +336,44 @@ class Navigator:
                         # The current row index is beyond what has been explored.
                         if self.horizon == 0:
                             # We have not explored anything yet, start from the beginning and skip non-data.
-                            self.fp.seek(0)
+                            fp.seek(0)
                             for _ in range(self.skip):
-                                self.fp.readline()
-                            if self.header:
-                                self.fp.readline()
+                                fp.readline()
+                            if self.file_has_header:
+                                fp.readline()
                         else:
                             # Go to the last known row pointer and advance the pointer by one row.
-                            self.fp.seek(self.row_ptr[-1])
-                            self.fp.readline()
+                            fp.seek(self.row_ptr[-1])
+                            fp.readline()
                         # Get the current pointer to the first unexplored row.
-                        ptr = self.fp.tell()
+                        ptr = fp.tell()
                         # Iterate through unexplored rows until we reach the requested row.
-                        for i in range(self.horizon, idx+1):
-                            line = self.fp.readline()
-                            if line:
-                                # An unexplored line has been found, store the pointer to this newly explored
-                                # row, set the pointer to the next unexplored row, and advance the horizon.
-                                self.row_ptr.append(ptr)
-                                ptr = self.fp.tell()
-                                self.horizon += 1
-                            else:
-                                # The end of the file has been reached. Set the row length of the file.
-                                self.length = self.horizon
-                                stop = self.length
-                                break
+                        # Only let one thread explore at a time.
+                        with self.lock:
+                            for i in range(self.horizon, idx + 1):
+                                line = fp.readline()
+                                if line:
+                                    # An unexplored line has been found, store the pointer to this newly explored
+                                    # row, set the pointer to the next unexplored row, and advance the horizon.
+                                    self.row_ptr.append(ptr)
+                                    ptr = fp.tell()
+                                    self.horizon += 1
+                                else:
+                                    # The end of the file has been reached. Set the row length of the file.
+                                    self.length = self.horizon
+                                    stop = self.length
+                                    break
                         if self.length is not None:
                             # No lines left to add to the result list, break out of while loop.
                             break
                     # Now that we have the pointer for the current index, move to the pointer.
-                    self.fp.seek(self.row_ptr[idx])
+                    fp.seek(self.row_ptr[idx])
                     if self.raw_output:
                         # Get the row as a string.
-                        row = self.fp.readline()
+                        row = fp.readline()
                     else:
                         # Get the row, optionally reformat, and read as csv.
-                        line = self.fp.readline()
+                        line = fp.readline()
                         line = self.reformat(self, line)
                         row = list(csv.reader([line], **self.fmtparams))[0]
                     # Yield the row and prepare to move on to the next index in the slice.
@@ -357,13 +395,13 @@ class Navigator:
             # the slice.
             for idx in range(start, stop, step):
                 # Move to the pointer of the current row index.
-                self.fp.seek(self.row_ptr[idx])
+                fp.seek(self.row_ptr[idx])
                 if self.raw_output:
                     # Get the row as a string.
-                    row = self.fp.readline()
+                    row = fp.readline()
                 else:
                     # Get the row, optionally reformat, and read as csv.
-                    line = self.fp.readline()
+                    line = fp.readline()
                     line = self.reformat(self, line)
                     row = list(csv.reader([line], **self.fmtparams))[0]
                 if self.header and not self.raw_output:
@@ -380,47 +418,50 @@ class Navigator:
         :param index: an integer index.
         :returns: a string, list, or dictionary of a row. 
         """
+        fp = self.get_or_create_fp()
         if self.length is not None:
             assert index < self.length
         if index >= self.horizon:
             # The row index is beyond what has been explored.
             if self.horizon == 0:
                 # We have not explored anything yet, start from the beginning and skip non-data.
-                self.fp.seek(0)
+                fp.seek(0)
                 for _ in range(self.skip):
-                    self.fp.readline()
-                if self.header:
-                    self.fp.readline()
+                    fp.readline()
+                if self.file_has_header:
+                    fp.readline()
             else:
                 # Go to the last known row pointer and advance the pointer by one row.
-                self.fp.seek(self.row_ptr[-1])
-                self.fp.readline()
+                fp.seek(self.row_ptr[-1])
+                fp.readline()
             # Get the current pointer to the first unexplored row.
-            ptr = self.fp.tell()
+            ptr = fp.tell()
             # Iterate through the unexplored rows until we reach the requested row.
-            for i in range(self.horizon, index+1):
-                line = self.fp.readline()
-                if line:
-                    # An unexplored line has been found, store the pointer to this newly explored row, set
-                    # the pointer to the next unexplored row, and advance the horizon.
-                    self.row_ptr.append(ptr)
-                    ptr = self.fp.tell()
-                    self.horizon += 1
-                else:
-                    # The end of the file has been reached. Set the row length of the file.
-                    self.length = self.horizon
-                    break
+            # Again, only allow one thread to explore at a time.
+            with self.lock:
+                for i in range(self.horizon, index + 1):
+                    line = fp.readline()
+                    if line:
+                        # An unexplored line has been found, store the pointer to this newly explored row, set
+                        # the pointer to the next unexplored row, and advance the horizon.
+                        self.row_ptr.append(ptr)
+                        ptr = fp.tell()
+                        self.horizon += 1
+                    else:
+                        # The end of the file has been reached. Set the row length of the file.
+                        self.length = self.horizon
+                        break
             if self.length is not None:
                 # Throw an error if index is too large.
                 assert index < self.length
         # Now that we have the pointer for the requested row, move to the pointer.
-        self.fp.seek(self.row_ptr[index])
+        fp.seek(self.row_ptr[index])
         if self.raw_output:
             # Get the row as a string.
-            row = self.fp.readline()
+            row = fp.readline()
         else:
             # Get the row, optionally reformat, and read as csv.
-            line = self.fp.readline()
+            line = fp.readline()
             line = self.reformat(self, line)
             row = list(csv.reader([line], **self.fmtparams))[0]
         if self.header and not self.raw_output:
@@ -432,21 +473,23 @@ class Navigator:
         """
         Private method to handle registered field indexing.
 
+        TODO: make it possible to run this without the extra self.register() step.
+
         :param field: a hashable (typically string) that may be used to get the pointers for a field.
         :param key: rows will match this key.
         :yields: a string, list, or dictionary of a row.
         """
-        # TODO: make it possible to run this without the extra self.register() step.
+        fp = self.get_or_create_fp()
         # Iterate through the pointers of all matching rows.
         for ptr in self.field_ptr[field][key]:
             # Move to the pointer.
-            self.fp.seek(ptr)
+            fp.seek(ptr)
             if self.raw_output:
                 # Get the row as a string.
-                row = self.fp.readline()
+                row = fp.readline()
             else:
                 # Get the row, optionally reformat, and read as csv.
-                line = self.fp.readline()
+                line = fp.readline()
                 line = self.reformat(self, line)
                 row = list(csv.reader([line], **self.fmtparams))[0]
             if self.header and not self.raw_output:
