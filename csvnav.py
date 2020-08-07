@@ -79,7 +79,7 @@ class Navigator:
         attached to this thread has been closed, this will not open a new one but rather return the closed file pointer.
         The file pointer is unique to the calling thread.
 
-        :returns: a file pointer unique to the calling thread.
+        :return: a file pointer unique to the calling thread.
         """
         # This function should be thread safe since dict keys are unique to the thread.
         thread_id = threading.get_ident()
@@ -89,45 +89,42 @@ class Navigator:
             self.fps[thread_id] = open(self.path, 'r', **self.open_opts)
             return self.fps[thread_id]
 
-    def _readrow(self, fp=None, return_raw=False):
+    def _readrow(self, fp: TextIO = None) -> GenericRowType:
+        """
+        Read a row from the file. If self.raw_output is True, this will return a row as a string up to the first newline
+        character it reaches (and will not attempt to resolve unmatched quotes, for instance). Otherwise, this method
+        will read lines until it can construct a valid csv formatted row or reaches EOF.
+
+        :param fp: an optional file pointer. If not provided, will be retrieved automatically by thread id.
+        :return: a string, list, or dict of a row.
+        """
         fp = fp if fp else self._get_or_create_fp()
         if self.raw_output:
-            # Return the line as a string.
+            # Return the line as a string. Note that this will break at any newline and will not handle e.g. mismatched
+            # quotechar.
             return fp.readline()
         else:
+            # Read line as a csv row. In order to deal with any newlines that might appear within a column, this will
+            # attempt to interpret a read error as an incomplete line and will keep retrieving lines until the line
+            # can be correctly formatted as a csv row (hence hard-coding fmtparams['strict'] = True) or EOF is reached.
             line = ''
             next_line = fp.readline()
             while next_line:
                 try:
                     line += self.reformat(self, next_line)
+                    # Attempt to format the line as csv.
                     row = list(csv.reader([line], **self.fmtparams))[0]
-                    if return_raw:
-                        # Return the row as a string.
-                        return line
-                    elif self.header:
+                    if self.header:
                         # Return the row as a dictionary.
                         return {k: v for k, v in zip(self.header, row)}
                     else:
                         # Return the row as a list.
                         return row
-                except:
+                except csv.Error:
+                    # The line is invalid csv, attempt to resolve by getting the next line (and appending).
                     next_line = fp.readline()
-            return '' if return_raw else []
-        # lines = [fp.readline()]
-        # delimiter = self.fmtparams.get('delimiter', ',')
-        # start, end = count_quotes(lines[0], delimiter)
-        # count = start - end
-        # while count > 0:
-        #     line = fp.readline()
-        #     if line:
-        #         lines.append(line)
-        #         start, end = count_quotes(lines[-1], delimiter)
-        #         count += start - end
-        #     else:
-        #         break
-        # if count < 0:
-        #     raise Exception('Malformed double quotes in csv file: there are more end quotes than start quotes!')
-        # return ''.join(lines)
+            # We reached EOF. This may throw an error if the line is invalid csv.
+            return list(csv.reader([line], **self.fmtparams))[0]
 
     def close(self):
         """
@@ -143,7 +140,7 @@ class Navigator:
         function will return None. In this case, you can get the length of the file by calling self.size(force=True).
         See the method self.size() for more information.
 
-        :returns: the number of rows of data or None if the end of the file has not been reached.
+        :return: the number of rows of data or None if the end of the file has not been reached.
         """
         return self.size()
 
@@ -162,7 +159,7 @@ class Navigator:
         :param force: when True, forcibly computes the number of characters in the file even if the end of the file
             has not been reached. When False and the end of the file has not been reached, the function will return
             None. Default is False.
-        :returns: the number of characters in the file or None if the end of the file has not been reached.
+        :return: the number of characters in the file or None if the end of the file has not been reached.
         """
         fp = self._get_or_create_fp()
         if force and self.char_len is None:
@@ -178,7 +175,7 @@ class Navigator:
             file has not been reached. When False and the end of the file has not been reached, this function will
             return None. Warning - to count the number of rows when force=True, this function needs to iterate through 
             all the rows in the file which could take long for very large files. Default is False.
-        :returns: the number of rows of data in the file or None if the end of the file has not been reached.
+        :return: the number of rows of data in the file or None if the end of the file has not been reached.
         """
         fp = self._get_or_create_fp()
         # The size of the file is universal across threads so only one needs to do the work and others can wait.
@@ -230,7 +227,7 @@ class Navigator:
         Get a generator that only yields rows matching a given condition.
 
         :param condition: a function that takes in a row and returns a boolean for whether to yield the row or not.
-        :yields: either string, list, or dictionary of a row.
+        :yield: either string, list, or dictionary of a row.
         """
         for row in self:
             if condition(row):
@@ -266,8 +263,7 @@ class Navigator:
             self._readrow(fp)
         # Get position of first line of data.
         ptr = fp.tell()
-        # Initialize mappings, row pointer array, and number of data rows.
-        field_to_col = {k: self.header.index(k) for k in fields}
+        # Initialize mapping, row pointer array, and number of data rows.
         fields_to_vals = {k: {} for k in fields}
         row_ptr = []
         length = 0
@@ -277,8 +273,8 @@ class Navigator:
                 # If the line is non-empty, store a pointer to the beginning of the line.
                 row_ptr.append(ptr)
                 # Associate row pointer with a key in each field.
-                for field, col in field_to_col.items():
-                    val = row[col]
+                for field in fields:
+                    val = row[field]
                     if val not in fields_to_vals[field]:
                         fields_to_vals[field][val] = [ptr]
                     else:
@@ -302,7 +298,7 @@ class Navigator:
         """
         Gets a dict_keys object corresponding the fields (columns) that have been grouped by the self.register() method.
 
-        :returns: fields (columns) that have been registered.
+        :return: fields (columns) that have been registered.
         """
         return self.field_ptr.keys()
         
@@ -311,7 +307,7 @@ class Navigator:
         Gets a dict_keys object corresponding to the unique values of the field (column) that has been used to key a
         grouping by the self.register() method.
 
-        :returns: keys of a registered field (column).
+        :return: keys of a registered field (column).
         """
         return self.field_ptr[field].keys()
         
@@ -320,7 +316,7 @@ class Navigator:
         """
         Get the header that defines the columns of the file.
 
-        :returns: the header of the file.
+        :return: the header of the file.
         """
         return self.header
         
@@ -332,7 +328,7 @@ class Navigator:
         :param key: one of the unique values in the field (column) of the file defined by field that is used as a key in
             the grouping by the self.register() method.
         :param default: value to return if key does not exist. Default is None.
-        :returns: either returns the matching rows or a default value.
+        :return: either returns the matching rows or a default value.
         """
         if key not in self.keys(field):
             # If the key does not exist for a given field, return the default.
@@ -346,7 +342,7 @@ class Navigator:
         Get a generator over key/value pairs for a given registered field by the self.register() method.
 
         :param field: typically a string that matches an element of the header.
-        :yields: returns a generator that iterates over a tuple of key/value pairs.
+        :yield: returns a generator that iterates over a tuple of key/value pairs.
         """
         # Should be thread safe because content of self.field_ptr[field] should not change once registered.
         for key in self.field_ptr[field]:
@@ -357,7 +353,7 @@ class Navigator:
         Private method to handle slicing of the Navigator object.
 
         :param index: a slice object.
-        :yields: either string, list, or dictionary of a row.
+        :yield: either string, list, or dictionary of a row.
         """
         assert isinstance(index, slice)
         # Received a slice so get a result generator of corresponding rows.
@@ -432,7 +428,7 @@ class Navigator:
         Private method to handle an index of the Navigator object.
 
         :param index: an integer index.
-        :returns: a string, list, or dictionary of a row. 
+        :return: a string, list, or dictionary of a row. 
         """
         fp = self._get_or_create_fp()
         if self.length is not None:
@@ -483,7 +479,7 @@ class Navigator:
 
         :param field: a hashable (typically string) that may be used to get the pointers for a field.
         :param key: rows will match this key.
-        :yields: a string, list, or dictionary of a row.
+        :yield: a string, list, or dictionary of a row.
         """
         fp = self._get_or_create_fp()
         # Iterate through the pointers of all matching rows.
@@ -510,7 +506,7 @@ class Navigator:
                 tuple<hashable,str> - a two element tuple where the first element is the field (column) and the second
                     element is the key which returns all rows that match the field and key. Must be registered first
                     by method self.register().
-        :returns: the three different return/yield types depend on the following conditions:
+        :return: the three different return/yield types depend on the following conditions:
                 str - when raw_output=True and index is an int, then the row is returned as a string.
                 dict - when the Navigator instance has a header defined and index is an int, then a dictionary of column
                     names to values in the indexed row is returned.
@@ -542,7 +538,7 @@ class Navigator:
         """
         Initialize an iterator over the rows of data in the file.
 
-        :returns: returns this instance.
+        :return: returns this instance.
         """
         self.start_iter = 0
         return self
@@ -551,41 +547,10 @@ class Navigator:
         """
         Get the next row of data in the file.
 
-        :returns: a row with types defined in the __getitem__ return documentation.
+        :return: a row with types defined in the __getitem__ return documentation.
         """
         if self.start_iter >= self.size(force=True):
             raise StopIteration
         else:
             self.start_iter += 1
             return self.__getitem__(self.start_iter - 1)
-
-
-def count_quotes(line, escapechar=None, delimiter=',', doublequote=True, quotechar='"'):
-    #line = line.replace('\\"', '""')
-    start_pattern = f'^(")|({delimiter}")'
-    end_pattern = f'(",)|("[\r\n])$'
-    start_quotes = end_quotes = 0
-    start_index = set()
-    for match in re.finditer(start_pattern, line):
-        start_index.add(match.start() + match.group().index('"'))
-    end_index = set()
-    for match in re.finditer(end_pattern, line):
-        end_index.add(match.start() + match.group().index('"'))
-    end_index = end_index - start_index
-    for i in start_index:
-        num_quotes = 1
-        for j in range(i + 1, len(line)):
-            if line[j] != '"' or j in end_index:
-                break
-            num_quotes += 1
-        if num_quotes % 2 != 0:
-            start_quotes += 1
-    for i in end_index:
-        num_quotes = 1
-        for j in reversed(range(0, i)):
-            if line[j] != '"' or j in start_index:
-                break
-            num_quotes += 1
-        if num_quotes % 2 != 0:
-            end_quotes += 1
-    return start_quotes, end_quotes
