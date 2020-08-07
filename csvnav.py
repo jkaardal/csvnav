@@ -69,7 +69,6 @@ class Navigator:
         self.start_iter = 0
         # Thread locking.
         self.lock = threading.Lock()
-        
 
     def _get_or_create_fp(self) -> TextIO:
         """
