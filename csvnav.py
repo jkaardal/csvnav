@@ -41,6 +41,10 @@ class Navigator:
         self.open_opts = {} if open_opts is None else open_opts
         self.fmtparams = kwargs
         self.fmtparams['strict'] = True
+        # Return raw string row without any formatting.
+        self.raw_output = raw_output
+        # User defined function to reformat a row string (default passes through).
+        self.reformat = lambda self, line: line if reformat is None else reformat
         # Get the current thread id.
         thread_id = threading.get_ident()
         # Open the file (index by current thread id).
@@ -52,21 +56,15 @@ class Navigator:
         # Initialize pointer list and dict for registering groups.
         self.row_ptr = []
         self.field_ptr = {}
+        self.header = None
         if header:
             # Extract the csv header.
-            self.header = list(csv.reader([self.fps[thread_id].readline()], **self.fmtparams))[0]
-        else:
-            # The file does not have a header.
-            self.header = None
+            self.header = self._readrow(self.fps[thread_id])
         # Initialize the number of explored (accessed) rows so far.
         self.horizon = 0
         # Initialize row length and total character length of the file.
         self.length = None
         self.char_len = None
-        # Return raw string row without any formatting.
-        self.raw_output = raw_output
-        # User defined function to reformat a row string (default passes through).
-        self.reformat = lambda self, line: line if reformat is None else reformat
         # Initialize iterator counter.
         self.start_iter = 0
         # Thread locking.
