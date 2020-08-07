@@ -1,6 +1,7 @@
 from typing import Hashable, Any, Callable, List, Tuple, Generator, TextIO
 from collections import KeysView
 import csv
+import re
 import threading
 
 GenericRowType = dict or list or str
@@ -12,7 +13,7 @@ class Navigator:
     
     def __init__(self, path: str, header: bool = False, raw_output: bool = False, 
                  reformat: Callable[['Navigator', str], str] = None, skip: int = 0, dialect: str = 'excel', 
-                 open_opts: dict = None, **fmtparams):
+                 open_opts: dict = None, **kwargs):
         """
         Instantiate a Navigator object. Note that this class assumes that the file it opens is static.
 
@@ -32,12 +33,14 @@ class Navigator:
         :param open_opts: see keyword arguments in the docs for builtin function open(). Note that the keyword
             argument mode is restricted because Navigator is fixed to mode 'r'. Default is {} (uses defaults).
         :param **fmtparams: additional keyword arguments are passed into csv.reader() and the supported fields
-            are identical to those defined by the fmtparams argument of csv.reader() in the documentation.
+            are identical to those defined by the fmtparams argument of csv.reader() in the documentation. Note that the
+            'strict' parameter is hard-coded to True so the file must contain valid csv or else it will error.
         """
         self.path = path
         self.file_has_header = header
         self.open_opts = {} if open_opts is None else open_opts
-        self.fmtparams = fmtparams
+        self.fmtparams = kwargs
+        self.fmtparams['strict'] = True
         # Get the current thread id.
         thread_id = threading.get_ident()
         # Open the file (index by current thread id).
@@ -68,8 +71,9 @@ class Navigator:
         self.start_iter = 0
         # Thread locking.
         self.lock = threading.Lock()
+        
 
-    def get_or_create_fp(self) -> TextIO:
+    def _get_or_create_fp(self) -> TextIO:
         """
         For the calling thread, either get an existing file pointer or create a new one. If a previous file pointer
         attached to this thread has been closed, this will not open a new one but rather return the closed file pointer.
@@ -84,6 +88,46 @@ class Navigator:
         else:
             self.fps[thread_id] = open(self.path, 'r', **self.open_opts)
             return self.fps[thread_id]
+
+    def _readrow(self, fp=None, return_raw=False):
+        fp = fp if fp else self._get_or_create_fp()
+        if self.raw_output:
+            # Return the line as a string.
+            return fp.readline()
+        else:
+            line = ''
+            next_line = fp.readline()
+            while next_line:
+                try:
+                    line += self.reformat(self, next_line)
+                    row = list(csv.reader([line], **self.fmtparams))[0]
+                    if return_raw:
+                        # Return the row as a string.
+                        return line
+                    elif self.header:
+                        # Return the row as a dictionary.
+                        return {k: v for k, v in zip(self.header, row)}
+                    else:
+                        # Return the row as a list.
+                        return row
+                except:
+                    next_line = fp.readline()
+            return '' if return_raw else []
+        # lines = [fp.readline()]
+        # delimiter = self.fmtparams.get('delimiter', ',')
+        # start, end = count_quotes(lines[0], delimiter)
+        # count = start - end
+        # while count > 0:
+        #     line = fp.readline()
+        #     if line:
+        #         lines.append(line)
+        #         start, end = count_quotes(lines[-1], delimiter)
+        #         count += start - end
+        #     else:
+        #         break
+        # if count < 0:
+        #     raise Exception('Malformed double quotes in csv file: there are more end quotes than start quotes!')
+        # return ''.join(lines)
 
     def close(self):
         """
@@ -120,7 +164,7 @@ class Navigator:
             None. Default is False.
         :returns: the number of characters in the file or None if the end of the file has not been reached.
         """
-        fp = self.get_or_create_fp()
+        fp = self._get_or_create_fp()
         if force and self.char_len is None:
             # Forcibly compute if stored value is None.
             self.char_len = fp.seek(0, 2)
@@ -136,7 +180,7 @@ class Navigator:
             all the rows in the file which could take long for very large files. Default is False.
         :returns: the number of rows of data in the file or None if the end of the file has not been reached.
         """
-        fp = self.get_or_create_fp()
+        fp = self._get_or_create_fp()
         # The size of the file is universal across threads so only one needs to do the work and others can wait.
         with self.lock:
             # Get the number of rows in the file (less self.skip and the header lines).
@@ -150,17 +194,17 @@ class Navigator:
                         fp.readline()
                     # Skip header.
                     if self.file_has_header:
-                        fp.readline()
+                        self._readrow(fp)
                 else:
                     # Move to last known position and skip line.
                     fp.seek(self.row_ptr[-1])
-                    fp.readline()
+                    self._readrow(fp)
                 # Get pointer to current position.
                 ptr = fp.tell()
                 while True:
                     # Read each remaining row in the file.
-                    line = fp.readline()
-                    if line:
+                    row = self._readrow(fp)
+                    if row:
                         # Row found, expand horizon and continue.
                         self.row_ptr.append(ptr)
                         ptr = fp.tell()
@@ -205,7 +249,7 @@ class Navigator:
             defined in self.header whose values we would like to group by. Note that each field is grouped independently
             (no conjunctions/disjunctions).
         """
-        fp = self.get_or_create_fp()
+        fp = self._get_or_create_fp()
         # If the file has a header, rows can be grouped such that the values of a field (column) are keys.
         assert self.header is not None
         assert not self.raw_output
@@ -219,7 +263,7 @@ class Navigator:
             fp.readline()
         if self.file_has_header:
             # Skip header.
-            fp.readline()
+            self._readrow(fp)
         # Get position of first line of data.
         ptr = fp.tell()
         # Initialize mappings, row pointer array, and number of data rows.
@@ -228,13 +272,10 @@ class Navigator:
         row_ptr = []
         length = 0
         while True:
-            line = fp.readline()
-            if line:
+            row = self._readrow(fp)
+            if row:
                 # If the line is non-empty, store a pointer to the beginning of the line.
                 row_ptr.append(ptr)
-                # Apply udf to reformat line.
-                line = self.reformat(self, line)
-                row = list(csv.reader([line], **self.fmtparams))[0]
                 # Associate row pointer with a key in each field.
                 for field, col in field_to_col.items():
                     val = row[col]
@@ -323,7 +364,7 @@ class Navigator:
         start = 0 if index.start is None else index.start
         step = 1 if index.step is None else index.step
 
-        fp = self.get_or_create_fp()
+        fp = self._get_or_create_fp()
         if self.length is None:
             # Length of the file is unknown, need to explore.
             stop = None if index.stop is None else index.stop
@@ -340,19 +381,19 @@ class Navigator:
                             for _ in range(self.skip):
                                 fp.readline()
                             if self.file_has_header:
-                                fp.readline()
+                                self._readrow(fp)
                         else:
                             # Go to the last known row pointer and advance the pointer by one row.
                             fp.seek(self.row_ptr[-1])
-                            fp.readline()
+                            self._readrow(fp)
                         # Get the current pointer to the first unexplored row.
                         ptr = fp.tell()
                         # Iterate through unexplored rows until we reach the requested row.
                         # Only let one thread explore at a time.
                         with self.lock:
                             for i in range(self.horizon, idx + 1):
-                                line = fp.readline()
-                                if line:
+                                row = self._readrow(fp)
+                                if row:
                                     # An unexplored line has been found, store the pointer to this newly explored
                                     # row, set the pointer to the next unexplored row, and advance the horizon.
                                     self.row_ptr.append(ptr)
@@ -368,21 +409,8 @@ class Navigator:
                             break
                     # Now that we have the pointer for the current index, move to the pointer.
                     fp.seek(self.row_ptr[idx])
-                    if self.raw_output:
-                        # Get the row as a string.
-                        row = fp.readline()
-                    else:
-                        # Get the row, optionally reformat, and read as csv.
-                        line = fp.readline()
-                        line = self.reformat(self, line)
-                        row = list(csv.reader([line], **self.fmtparams))[0]
                     # Yield the row and prepare to move on to the next index in the slice.
-                    if self.header and not self.raw_output:
-                        # Yield the row as a dictionary.
-                        yield {k: v for k, v in zip(self.header, row)}
-                    else:
-                        # Yield the row as a string or list.
-                        yield row
+                    yield self._readrow(fp)
                     idx += step
                 else:
                     # We are at the end of the slice, break out.
@@ -396,20 +424,8 @@ class Navigator:
             for idx in range(start, stop, step):
                 # Move to the pointer of the current row index.
                 fp.seek(self.row_ptr[idx])
-                if self.raw_output:
-                    # Get the row as a string.
-                    row = fp.readline()
-                else:
-                    # Get the row, optionally reformat, and read as csv.
-                    line = fp.readline()
-                    line = self.reformat(self, line)
-                    row = list(csv.reader([line], **self.fmtparams))[0]
-                if self.header and not self.raw_output:
-                    # Yield the row as a dictionary.
-                    yield {k: v for k, v in zip(self.header, row)}
-                else:
-                    # Yield the row as a string or list.
-                    yield row
+                # Yield the current row.
+                yield self._readrow(fp)
 
     def _handle_scalar(self, index: int) -> GenericRowType:
         """
@@ -418,7 +434,7 @@ class Navigator:
         :param index: an integer index.
         :returns: a string, list, or dictionary of a row. 
         """
-        fp = self.get_or_create_fp()
+        fp = self._get_or_create_fp()
         if self.length is not None:
             assert index < self.length
         if index >= self.horizon:
@@ -429,19 +445,19 @@ class Navigator:
                 for _ in range(self.skip):
                     fp.readline()
                 if self.file_has_header:
-                    fp.readline()
+                    self._readrow(fp)
             else:
                 # Go to the last known row pointer and advance the pointer by one row.
                 fp.seek(self.row_ptr[-1])
-                fp.readline()
+                self._readrow(fp)
             # Get the current pointer to the first unexplored row.
             ptr = fp.tell()
             # Iterate through the unexplored rows until we reach the requested row.
             # Again, only allow one thread to explore at a time.
             with self.lock:
                 for i in range(self.horizon, index + 1):
-                    line = fp.readline()
-                    if line:
+                    row = self._readrow(fp)
+                    if row:
                         # An unexplored line has been found, store the pointer to this newly explored row, set
                         # the pointer to the next unexplored row, and advance the horizon.
                         self.row_ptr.append(ptr)
@@ -456,18 +472,8 @@ class Navigator:
                 assert index < self.length
         # Now that we have the pointer for the requested row, move to the pointer.
         fp.seek(self.row_ptr[index])
-        if self.raw_output:
-            # Get the row as a string.
-            row = fp.readline()
-        else:
-            # Get the row, optionally reformat, and read as csv.
-            line = fp.readline()
-            line = self.reformat(self, line)
-            row = list(csv.reader([line], **self.fmtparams))[0]
-        if self.header and not self.raw_output:
-            # Convert the row into a dictionary.
-            row = {k: v for k, v in zip(self.header, row)}
-        return row
+        # Return the current row.
+        return self._readrow(fp)
 
     def _handle_field(self, field: Hashable, key: str) -> GenericRowType:
         """
@@ -479,25 +485,13 @@ class Navigator:
         :param key: rows will match this key.
         :yields: a string, list, or dictionary of a row.
         """
-        fp = self.get_or_create_fp()
+        fp = self._get_or_create_fp()
         # Iterate through the pointers of all matching rows.
         for ptr in self.field_ptr[field][key]:
             # Move to the pointer.
             fp.seek(ptr)
-            if self.raw_output:
-                # Get the row as a string.
-                row = fp.readline()
-            else:
-                # Get the row, optionally reformat, and read as csv.
-                line = fp.readline()
-                line = self.reformat(self, line)
-                row = list(csv.reader([line], **self.fmtparams))[0]
-            if self.header and not self.raw_output:
-                # Yield the row as a dictionary.
-                yield {k: v for k, v in zip(self.header, row)}
-            else:
-                # Yield the row as a string or list.
-                yield row
+            # Yield the current row.
+            yield self._readrow(fp)
 
     def __getitem__(self, index: GenericIndexType) -> GenericRowType or GenericGenType:
         """
@@ -564,3 +558,34 @@ class Navigator:
         else:
             self.start_iter += 1
             return self.__getitem__(self.start_iter - 1)
+
+
+def count_quotes(line, escapechar=None, delimiter=',', doublequote=True, quotechar='"'):
+    #line = line.replace('\\"', '""')
+    start_pattern = f'^(")|({delimiter}")'
+    end_pattern = f'(",)|("[\r\n])$'
+    start_quotes = end_quotes = 0
+    start_index = set()
+    for match in re.finditer(start_pattern, line):
+        start_index.add(match.start() + match.group().index('"'))
+    end_index = set()
+    for match in re.finditer(end_pattern, line):
+        end_index.add(match.start() + match.group().index('"'))
+    end_index = end_index - start_index
+    for i in start_index:
+        num_quotes = 1
+        for j in range(i + 1, len(line)):
+            if line[j] != '"' or j in end_index:
+                break
+            num_quotes += 1
+        if num_quotes % 2 != 0:
+            start_quotes += 1
+    for i in end_index:
+        num_quotes = 1
+        for j in reversed(range(0, i)):
+            if line[j] != '"' or j in start_index:
+                break
+            num_quotes += 1
+        if num_quotes % 2 != 0:
+            end_quotes += 1
+    return start_quotes, end_quotes
