@@ -66,7 +66,7 @@ class Navigator:
         self.length = None
         self.char_len = None
         # Initialize iterator counter.
-        self.start_iter = 0
+        self.start_iter = {thread_id: 0}
         # Thread locking.
         self.lock = threading.Lock()
 
@@ -129,7 +129,10 @@ class Navigator:
         """
         thread_id = threading.get_ident()
         if thread_id in self.fps:
-            self.fps[thread_id].close()
+            with self.lock:
+                self.fps[thread_id].close()
+                self.fps.pop(thread_id)
+                self.start_iter.pop(thread_id)
     
     def __len__(self) -> int or None:
         """
@@ -537,7 +540,7 @@ class Navigator:
 
         :return: returns this instance.
         """
-        self.start_iter = 0
+        self.start_iter[threading.get_ident()] = 0
         return self
     
     def __next__(self) -> GenericRowType:
@@ -546,8 +549,9 @@ class Navigator:
 
         :return: a row with types defined in the __getitem__ return documentation.
         """
-        if self.start_iter >= self.size(force=True):
+        thread_id = threading.get_ident()
+        if self.start_iter[thread_id] >= self.size(force=True):
             raise StopIteration
         else:
-            self.start_iter += 1
-            return self.__getitem__(self.start_iter - 1)
+            self.start_iter[thread_id] += 1
+            return self.__getitem__(self.start_iter[thread_id] - 1)
