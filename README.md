@@ -1,6 +1,10 @@
-## CSVNAV: a python class for memory-efficient navigation of CSV/Text files.
+## CSVNAV: a python 3 class for memory-efficient navigation of CSV/Text files.
 
-This package can be installed using setup tools:
+This package can be installed with pip:
+```
+pip install csvnav
+```
+or by downloading this repo and using setup tools:
 ```sh
 python setup.py install
 ```
