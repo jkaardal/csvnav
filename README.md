@@ -103,7 +103,7 @@ battery [{'time': '2', 'product': 'battery', 'quantity': '120'}]
 ```
 Note that groups are then accessed by two "indexes", namely the column name and the key.
 
-The `Navigator` class should be thread safe (though I have not done much testing of this feature). `Navigator` has some more functionality that I have not described here but this covers the basics. Refer to the docstrings of the various methods of the `Navigator` class for more information.
+The `Navigator` class should be thread safe and an instance can be shared between threads. `Navigator` has some more functionality that I have not described here but this covers the basics. Refer to the docstrings of the various methods of the `Navigator` class for more information.
 
 ## About
 
