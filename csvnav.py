@@ -4,16 +4,21 @@ import csv
 import re
 import threading
 
+
 GenericRowType = dict or list or str
 GenericGenType = Generator[GenericRowType, None, None]
 GenericIndexType = int or slice or Tuple[Hashable, str]
 
 
+class CharLimitExceededError(Exception):
+    pass
+
+
 class Navigator:
     
     def __init__(self, path: str, header: bool = False, raw_output: bool = False, 
-                 reformat: Callable[['Navigator', str], str] = None, skip: int = 0, dialect: str = 'excel', 
-                 open_opts: dict = None, **kwargs):
+                 reformat: Callable[['Navigator', str], str] = None, skip: int = 0, char_lim: int or None = 1e6, 
+                 dialect: str = 'excel', open_opts: dict = None, **kwargs):
         """
         Instantiate a Navigator object. Note that this class assumes that the file it opens is static.
 
@@ -29,6 +34,9 @@ class Navigator:
             that is then passed into csv.reader. Default is lambda self, line: line.
         :param skip: number of rows to skip at the beginning of the file to reach either the header row or the first
             row of data. Default is 0.
+        :param char_lim: the maximum number of characters allowed in a row. The purpose of this is to prevent 
+            accidentally reading a huge amount of data if the csv file is not strictly valid. Can be set to None for no 
+            limit. The default is 1e6 characters.
         :param dialect: see csv.reader() docs for definition. Default is 'excel'.
         :param open_opts: see keyword arguments in the docs for builtin function open(). Note that the keyword
             argument mode is restricted because Navigator is fixed to mode 'r'. Default is {} (uses defaults).
@@ -38,6 +46,7 @@ class Navigator:
         """
         self.path = path
         self.file_has_header = header
+        self.char_lim = char_lim
         self.open_opts = {} if open_opts is None else open_opts
         self.fmtparams = kwargs
         self.fmtparams['strict'] = True
@@ -99,15 +108,27 @@ class Navigator:
         if self.raw_output:
             # Return the line as a string. Note that this will break at any newline and will not handle e.g. mismatched
             # quotechar.
-            return fp.readline()
+            line = fp.readline()
+            if self.char_lim and len(line) > self.char_lim:
+                raise CharLimitExceededError(f'The number of characters in the line is {len(line)} which exceeds the '
+                                             f'limit of {self.char_lim} characters. Is the csv file valid? If so, you '
+                                             f'can either increase char_lim or set it None.')
+            return line
         else:
             # Read line as a csv row. In order to deal with any newlines that might appear within a column, this will
             # attempt to interpret a read error as an incomplete line and will keep retrieving lines until the line
             # can be correctly formatted as a csv row (hence hard-coding fmtparams['strict'] = True) or EOF is reached.
             line = ''
+            line_length = 0
             next_line = fp.readline()
             while next_line:
                 try:
+                    line_length += len(next_line)
+                    if self.char_lim and line_length > self.char_lim:
+                        raise CharLimitExceededError(f'The number of characters in the row is {len(line)} which '
+                                                     f'exceeds the limit of {self.char_lim} characters. Is the csv '
+                                                     f'file valid? If so, you can either increase char_lim or set it '
+                                                     f'None.')
                     line += self.reformat(self, next_line)
                     # Attempt to format the line as csv.
                     row = list(csv.reader([line], **self.fmtparams))[0]
@@ -288,7 +309,7 @@ class Navigator:
         # Since all rows explored, store all row pointers (atomic).
         self.row_ptr = row_ptr
         # GIL protects us and all threads should have the same result for a given field.
-        for field, vals in fields_to_vals.items():
+        for field in fields_to_vals:
             self.field_ptr[field] = fields_to_vals[field]
         self.length = length
         self.horizon = length
@@ -387,7 +408,7 @@ class Navigator:
                         # Iterate through unexplored rows until we reach the requested row.
                         # Only let one thread explore at a time.
                         with self.lock:
-                            for i in range(self.horizon, idx + 1):
+                            for _ in range(self.horizon, idx + 1):
                                 row = self._readrow(fp)
                                 if row:
                                     # An unexplored line has been found, store the pointer to this newly explored
@@ -451,7 +472,7 @@ class Navigator:
             # Iterate through the unexplored rows until we reach the requested row.
             # Again, only allow one thread to explore at a time.
             with self.lock:
-                for i in range(self.horizon, index + 1):
+                for _ in range(self.horizon, index + 1):
                     row = self._readrow(fp)
                     if row:
                         # An unexplored line has been found, store the pointer to this newly explored row, set
