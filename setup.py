@@ -2,8 +2,8 @@ from setuptools import setup
 
 setup_args = {
     'name': 'csvnav',
-    'version': '0.1',
-    'description': 'A python class for memory-efficient navigation of CSV/Text files.',
+    'version': '0.1.0',
+    'description': 'A python 3 class for memory-efficient navigation of CSV/Text files.',
     'long_description_content_type': 'text/markdown',
     'long_description': open('README.md', 'r').read(),
     'license': 'MIT',
